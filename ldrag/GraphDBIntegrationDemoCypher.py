@@ -1,4 +1,6 @@
+from IPython.core.debugger import prompt
 from langchain_community.llms.openai import OpenAIChat
+from langchain_core.prompts import BasePromptTemplate
 from langchain_neo4j import Neo4jVector
 from neo4j import GraphDatabase
 import dotenv
@@ -7,6 +9,7 @@ import json
 from typing import List, Dict, Any, Optional
 import numpy as np
 from langchain_openai import OpenAIEmbeddings
+from langchain_core.prompts import PromptTemplate
 from openai import models
 
 from ldrag.gptconnector import logger
@@ -35,9 +38,9 @@ class HybridGraphRAG:
         self.graph.refresh_schema()
 
         # LLMs for different purposes
-        self.cypher_llm = ChatOpenAI(model="gpt-4o", temperature=0.1)
-        self.qa_llm = ChatOpenAI(model="o4-mini-2025-04-16", temperature=1)
-        self.routing_llm = ChatOpenAI(model="gpt-4o", temperature=0)
+        self.cypher_llm = ChatOpenAI(model="gpt-4.1-2025-04-14", temperature=0)
+        self.qa_llm = ChatOpenAI(model="gpt-4.1-2025-04-14", temperature=0)
+        self.routing_llm = ChatOpenAI(model="gpt-4.1-2025-04-14", temperature=0)
 
     def _classify_query_type(self, user_query: str) -> str:
         """
@@ -70,18 +73,34 @@ class HybridGraphRAG:
         """
         try:
             from langchain_neo4j import GraphCypherQAChain
+            #refresh the graph schema to ensure it's up-to-date
+            self.graph.refresh_schema()
+            cypher_prompt = PromptTemplate.from_template(
+                template="""
+            Using the following graph schema, generate a Cypher query to answer the question:
+
+            Schema:
+            {schema}
+
+            Question:
+            {query}
+            Task has the task name as node_id.
+            Generate a valid Cypher statement (no extra commentary), include extra attributes in case they could be relevant:"""
+            )
 
             chain = GraphCypherQAChain.from_llm(
+                cypher_prompt= cypher_prompt,
                 cypher_llm=self.cypher_llm,
                 qa_llm=self.qa_llm,
                 graph=self.graph,
                 top_k=10,
+                validate_cypher=True,
                 allow_dangerous_requests=True,
                 verbose=True,
                 return_direct=False
             )
 
-            result = chain.invoke(user_query)
+            result = chain.invoke({"query":user_query,"schema":self.graph.schema})
             return {
                 "type": "cypher",
                 "result": result["result"],
@@ -376,22 +395,64 @@ def setup_vector_embeddings(uri, user, password):
 
             # Get all nodes with their meaningful content
             nodes_query = """
-            MATCH (n)
-            WITH n, labels(n)[0] as nodeType
-            OPTIONAL MATCH (n)-[r]->(m)
-            WITH n, nodeType, collect(DISTINCT type(r) + ':' + coalesce(m.node_id, toString(elementId(m)))) as relationships
-            RETURN elementId(n) as node_id, nodeType, relationships,
-                   CASE 
-                     WHEN nodeType = 'Task' THEN coalesce(n.usecase, n.node_id, '')
-                     WHEN nodeType = 'Attribute' THEN n.node_id + ' statistics: mean=' + toString(coalesce(n.mean, '')) + ' min=' + toString(coalesce(n.min, '')) + ' max=' + toString(coalesce(n.max, '')) + ' std_dev=' + toString(coalesce(n.std_dev, ''))
-                     WHEN nodeType = 'Dataset' THEN n.node_id + ' domain=' + coalesce(n.domain, '') + ' location=' + coalesce(n.locationOfDataRecording, '') + ' date=' + coalesce(n.dateOfRecording, '') + ' rows=' + toString(coalesce(n.amountOfRows, '')) + ' attributes=' + toString(coalesce(n.amountOfAttributes, ''))
-                     WHEN nodeType = 'ProcessedAttribute' THEN n.node_id + ' processed attribute'
-                     WHEN nodeType = 'SHAPValue' THEN n.node_id + ' SHAP value'
-                     WHEN nodeType = 'Model' THEN n.node_id + ' machine learning model'
-                     WHEN nodeType = 'Preprocessing' THEN n.node_id + ' preprocessing step'
-                     WHEN nodeType IN ['Material', 'Screw', 'Mechanical_Component', 'TestCase', 'Robotarm', 'Gripper'] THEN n.node_id + ' ' + toLower(nodeType)
-                     ELSE coalesce(n.node_id, toString(elementId(n)))
-                   END as text_content
+            MATCH (n) 
+WITH n, labels(n)[0] as nodeType 
+OPTIONAL MATCH (n)-[r]->(m) 
+WITH n, nodeType, collect(DISTINCT type(r) + ':' + coalesce(m.node_id, toString(elementId(m)))) as relationships 
+RETURN elementId(n) as node_id, 
+       nodeType, 
+       relationships, 
+       CASE 
+         WHEN nodeType = 'Task' THEN 
+           coalesce(n.usecase, n.node_id, '')
+         WHEN nodeType = 'Attribute' THEN 
+           n.node_id + ' statistics: mean=' + toString(coalesce(n.mean, '')) + 
+           ' min=' + toString(coalesce(n.min, '')) + 
+           ' max=' + toString(coalesce(n.max, '')) + 
+           ' std_dev=' + toString(coalesce(n.std_dev, ''))
+         WHEN nodeType = 'Dataset' THEN 
+           n.node_id + ' domain=' + coalesce(n.domain, '') + 
+           ' location=' + coalesce(n.locationOfDataRecording, '') + 
+           ' date=' + coalesce(n.dateOfRecording, '') + 
+           ' rows=' + toString(coalesce(n.amountOfRows, '')) + 
+           ' attributes=' + toString(coalesce(n.amountOfAttributes, ''))
+         WHEN nodeType = 'ProcessedAttribute' THEN 
+           n.node_id + ' processed attribute'
+         WHEN nodeType = 'SHAPValue' THEN 
+           n.node_id + ' SHAP value'
+         WHEN nodeType = 'Model' THEN 
+           n.node_id + ' machine learning model: ' +
+           'algorithm=' + coalesce(n.algorithm, '') + 
+           ' accuracy=' + toString(coalesce(n.accuracy, '')) + 
+           ' f1_class_0=' + toString(coalesce(n.f1Score_Class_0, '')) + 
+           ' f1_class_1=' + toString(coalesce(n.f1Score_Class_1, '')) + 
+           ' precision_class_0=' + toString(coalesce(n.precision_Class_0, '')) + 
+           ' precision_class_1=' + toString(coalesce(n.precision_Class_1, '')) + 
+           ' recall_class_0=' + toString(coalesce(n.recall_Class_0, '')) + 
+           ' recall_class_1=' + toString(coalesce(n.recall_Class_1, '')) + 
+           ' roc_auc=' + toString(coalesce(n.rocAucScore, '')) + 
+           ' confusion_matrix: true_neg=' + toString(coalesce(n.cm_00, '')) + 
+           ' false_pos=' + toString(coalesce(n.cm_01, '')) + 
+           ' false_neg=' + toString(coalesce(n.cm_10, '')) + 
+           ' true_pos=' + toString(coalesce(n.cm_11, '')) + 
+           ' training_info: ' + coalesce(n.training_information, '') + 
+           ' feature_weights: angle=' + toString(coalesce(n.weight_angle, '')) + 
+           ' bracketType=' + toString(coalesce(n.weight_bracketType, '')) + 
+           ' coating=' + toString(coalesce(n.weight_coating, '')) + 
+           ' diameter=' + toString(coalesce(n.weight_diameter, '')) + 
+           ' headThickness=' + toString(coalesce(n.weight_headThickness, '')) + 
+           ' headWidth=' + toString(coalesce(n.weight_headWidth, '')) + 
+           ' length=' + toString(coalesce(n.weight_length, '')) + 
+           ' screwId=' + toString(coalesce(n.weight_screwId, '')) + 
+           ' screwType=' + toString(coalesce(n.weight_screwType, '')) + 
+           ' weight=' + toString(coalesce(n.weight_weight, ''))
+         WHEN nodeType = 'Preprocessing' THEN 
+           n.node_id + ' preprocessing step'
+         WHEN nodeType IN ['Material', 'Screw', 'Mechanical_Component', 'TestCase', 'Robotarm', 'Gripper'] THEN 
+           n.node_id + ' ' + toLower(nodeType)
+         ELSE 
+           coalesce(n.node_id, toString(elementId(n)))
+       END as text_content
             """
 
             result = session.run(nodes_query)
@@ -508,11 +569,11 @@ if __name__ == "__main__":
     user = os.getenv("NEO4J_USER")
     password = os.getenv("NEO4J_PASSWORD")
     # Setup embeddings (run once)
-    # setup_vector_embeddings(uri, user, password)
+    #setup_vector_embeddings(uri, user, password)
     # Test queries tailored to your schema
     test_queries = [
         "Welche Modelle haben die besten SHAP values?",  # Cypher query
-        "Was sind die besten Modelle für die screw placement task nach ROC AUC score?"
+        "Was sind die best performende Modelle für die ScrewPlacement task nach roc auc?"
     ]
 
     hybrid_rag = HybridGraphRAG(uri, user, password)
