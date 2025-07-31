@@ -1,7 +1,7 @@
 import logging
 import time
 
-from .config import Config
+from config import Config
 
 logger = logging.getLogger(__name__)
 

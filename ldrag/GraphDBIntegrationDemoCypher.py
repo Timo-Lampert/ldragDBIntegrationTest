@@ -1,6 +1,4 @@
-from IPython.core.debugger import prompt
-from langchain_community.llms.openai import OpenAIChat
-from langchain_core.prompts import BasePromptTemplate
+
 from langchain_neo4j import Neo4jVector
 from neo4j import GraphDatabase
 import dotenv

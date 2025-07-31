@@ -7,8 +7,8 @@ import uuid
 from pyvis.network import Network
 
 logger = logging.getLogger(__name__)
-from .gptconnector import gpt_request_with_history, gpt_request
-from .ontology import Ontology
+from gptconnector import gpt_request_with_history, gpt_request
+from ontology import Ontology
 
 
 def information_retriever(ontology: Ontology, user_query: str, previous_conversation=None, sleep_time=0, starting_node:str=None):
@@ -235,6 +235,6 @@ def create_rag_instance_graph(rag_dict, question_id, question):
 if __name__ == '__main__':
     owl = Ontology()
 
-    owl.deserialize("../ontology_base.json")
-    information_retriever_with_graph(user_query="How many entries does the niryo dataset from september have?",
-                                     ontology=owl)
+    owl.deserialize("./tests/mocks/ontology.json")
+    print(information_retriever_with_graph(user_query="what is the best model for a screw placement task??",
+                                     ontology=owl))

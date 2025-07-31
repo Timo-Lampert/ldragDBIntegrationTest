@@ -147,6 +147,16 @@ result = information_retriever(
 )
 ```
 
+## Database Integration considerations
+This Library contains demos to retrieve using a Neo4j database.
+Migration towards a full database is subject to a few considerations:
+- **Data Model**: A graphDB might be necessary to store the ontology as well as relationships.
+- **Performance**: Optimization using the retriever function is necessary for larger datasets. The current implementation
+loads the entire ontology into memory, which may not be feasible for very large graphs, very long paths to travel may pose additional issues. To combat this, a second demo is provided,
+utilizing an approach using Cypher queries, as well as embeddings to retrieve relevant nodes from the database at scale.
+However, The quality of the output is highly dependent on how the question is worded, as some Cypher queries
+may not be able to retrieve the correct nodes. For example, finding the right node might not be possible unless the user is using the exact name of the node in their query. 
+
 ## Project Structure
 
 - `ontology.py` - Core ontology classes and data structures
